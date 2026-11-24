@@ -81,3 +81,7 @@ _setup/
 backups/
 backup/
 test-config/
+
+# local edit backups
+*.pre-aogara
+*.pre-*
