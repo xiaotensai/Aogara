@@ -740,7 +740,7 @@ pub struct GameCdp { pub browser: Browser, pub page: Page, pump: JoinHandle<()> 
 - 页面选择：URL 含 `maj-soul.com` / `mahjongsoul.com` 优先，否则取第一个页面；
 - 每次命令独立建连，**不依赖 autoplay 的页句柄**（那个只在游戏 WS 出现后才绑定）。
 
-端口来源：`game_cdp_port(&cfg.capture.chromium.extra_args)`（一行转发到公共函数 `util::parse_fixed_cdp_port`，与 `launch.rs::parse_fixed_debug_port`、`lib.rs` 启动日志共用同一解析逻辑），支持 `--remote-debugging-port=63503` 和分离参数两种写法；没有配置就直接报错，提示去改 config。
+端口来源：`game_cdp_port(&cfg.capture.chromium.extra_args)`（一行转发到公共函数 `util::parse_fixed_cdp_port`，与 `launch.rs::parse_fixed_debug_port`、`lib.rs` 启动日志共用同一解析逻辑），支持 `--remote-debugging-port=63503` 和分离参数两种写法。**新配置默认就带 63503；老配置若 `extra_args` 为空，`load_config` 的 `migrate_fixed_cdp_port` 会在加载时自动补上（内存+磁盘，不覆盖用户显式端口）。只有显式写了个非法端口值时才会报错，玩家无需手工配置。**
 
 ### 13.4 登录态探测 `probe_login`
 
@@ -986,7 +986,7 @@ capture/chromium
 
 | 情况 | 行为 |
 |---|---|
-| 未配置固定调试端口 | 命令直接报错，提示加 `--remote-debugging-port=63503` |
+| 未配置固定调试端口 | 加载时自动补 63503（`migrate_fixed_cdp_port`）；无需玩家干预 |
 | 游戏浏览器没起 | `GameCdp::connect` 超时（5s）→ 清晰错误，不崩溃 |
 | 对局中换号 | 拒绝，提示会掉线托管 |
 | 对局中 `pool_start` | 拒绝 |
@@ -1298,7 +1298,7 @@ Chrome-for-Testing 下载失败时会自动改用 npmmirror。
 | `browser exited (status ...)` | 浏览器被关 | 点「开始对局」或重启 Aogara |
 | `WS Connection error: ResetWithoutClosingHandshake` | 页面/浏览器被关 | 同上 |
 | `seat unresolved` 持续 | 没收到 `authGame` | 确认在对局中；必要时重启触发 reload 重握手 |
-| `号池需要固定游戏调试端口` | extra_args 没配 | 加 `--remote-debugging-port=63503` |
+| `号池需要固定游戏调试端口` | extra_args 缺端口且自动迁移未生效（如只读安装） | 正常会自动补 63503；若仍出现，在设置里确认 capture 模式为 chromium 后重启 |
 | `连接游戏浏览器失败` | 抓包没起/端口不通 | 先启动抓包；确认 Edge 在跑 |
 | `当前在对局中，不能换号` | 保护逻辑 | 等本局结束 |
 | `点模式后未进入对局` | 坐标偏/未配对 | 校准 `modes.<mode>`，或看是否被弹窗挡住 |
