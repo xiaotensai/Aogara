@@ -121,7 +121,15 @@ impl Default for ChromiumConfig {
             start_url: "https://game.maj-soul.com/1/".to_string(),
             cft_channel: "stable".to_string(),
             force_cft: false,
-            extra_args: vec![],
+            // The pool/multi-open commands find the game page through a fixed
+            // CDP port (slot1 = 63503; see slotN -> 63502+N). A fresh config
+            // written by the first-run wizard must carry this port from the
+            // start, otherwise the pool errors out and asks the player to hand
+            // edit config.toml. Keep in sync with config.example.toml.
+            extra_args: vec![
+                "--remote-debugging-port=63503".into(),
+                "--window-size=1280,720".into(),
+            ],
             block_telemetry: true,
         }
     }

@@ -200,7 +200,45 @@ pub fn load_config(cli_path: Option<&Path>) -> (AppConfig, PathBuf) {
     // shouldn't be hijacked into the wizard. Detect by presence of any
     // non-default field that the user must have written deliberately.
     migrate_first_run_marker(&mut cfg, &path);
+    // The pool/multi-open commands locate the game page via a fixed CDP port.
+    // Configs written before the wizard defaulted `extra_args` had it empty,
+    // which made every pool command fail with a "hand-edit config.toml" error.
+    // Fill the slot1 port in automatically; never override an explicit port.
+    migrate_fixed_cdp_port(&mut cfg, &path);
     (cfg, path)
+}
+
+/// Ensure the base config carries a fixed game CDP port (slot1 = 63503).
+///
+/// Older configs (and configs written by an older first-run wizard) had
+/// `capture.chromium.extra_args = []`, so `game_cdp_port()` returned None and
+/// every pool command errored asking the player to hand-edit config.toml.
+/// A normal player should never have to know this value. Fill it in when
+/// absent. The in-memory config is authoritative for running commands; the
+/// disk write-back is best-effort (a read-only install still works in memory).
+fn migrate_fixed_cdp_port(cfg: &mut AppConfig, path: &Path) {
+    let args = &mut cfg.capture.chromium.extra_args;
+    let has_explicit_port = args.iter().any(|a| {
+        a.starts_with("--remote-debugging-port=") || a == "--remote-debugging-port"
+    });
+    if has_explicit_port {
+        return;
+    }
+    eprintln!(
+        "Migrating config: adding fixed game CDP port 63503 to capture.chromium.extra_args"
+    );
+    args.push("--remote-debugging-port=63503".into());
+    if !args.iter().any(|a| a.starts_with("--window-size=")) {
+        args.push("--window-size=1280,720".into());
+    }
+    if let Ok(body) = toml::to_string_pretty(cfg) {
+        if let Err(e) = std::fs::write(path, body) {
+            eprintln!(
+                "Could not persist CDP port migration to {}: {e}",
+                path.display()
+            );
+        }
+    }
 }
 
 /// Existing users upgrading to a build that introduces the wizard get
@@ -263,6 +301,62 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// U-06: a fresh default config must carry the fixed slot1 CDP port so the
+    /// pool/multi-open commands can find the game page without asking the
+    /// player to hand-edit config.toml.
+    #[test]
+    fn default_config_carries_fixed_cdp_port() {
+        let cfg = AppConfig::default();
+        assert_eq!(
+            crate::util::parse_fixed_cdp_port(&cfg.capture.chromium.extra_args),
+            Some(63503),
+            "fresh config must default to slot1 port 63503"
+        );
+    }
+
+    /// U-06: an existing config with empty extra_args (written by the old
+    /// wizard) gets the port added in memory; load_config migrates it.
+    #[test]
+    fn migrates_empty_extra_args_to_fixed_cdp_port() {
+        let dir = temp_dir("cdp-migrate");
+        let target = dir.join("config.toml");
+        let mut cfg = AppConfig::default();
+        cfg.general.first_run_completed = true; // skip the wizard marker path
+        cfg.capture.chromium.extra_args.clear(); // simulate old empty config
+        std::fs::write(&target, toml::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        let (loaded, _) = load_config(Some(&target));
+
+        assert_eq!(
+            crate::util::parse_fixed_cdp_port(&loaded.capture.chromium.extra_args),
+            Some(63503),
+            "empty extra_args must be migrated to a fixed port in memory"
+        );
+        // And persisted back so the fix is permanent.
+        let on_disk: AppConfig = toml::from_str(&std::fs::read_to_string(&target).unwrap()).unwrap();
+        assert_eq!(
+            crate::util::parse_fixed_cdp_port(&on_disk.capture.chromium.extra_args),
+            Some(63503),
+            "migration must be written back to disk"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// U-06: a user's explicit custom port must not be clobbered by migration.
+    #[test]
+    fn migration_keeps_explicit_custom_port() {
+        let mut cfg = AppConfig::default();
+        cfg.capture.chromium.extra_args = vec!["--remote-debugging-port=9222".into()];
+        let path = std::path::Path::new("unused-config.toml");
+        migrate_fixed_cdp_port(&mut cfg, path);
+        assert_eq!(
+            crate::util::parse_fixed_cdp_port(&cfg.capture.chromium.extra_args),
+            Some(9222),
+            "explicit port must survive migration untouched"
+        );
+        assert_eq!(cfg.capture.chromium.extra_args.len(), 1);
     }
 
     /// The nested `[bot.api]` table must survive a TOML round-trip inside the
