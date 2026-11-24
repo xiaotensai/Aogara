@@ -28,7 +28,9 @@
     "hours": "Duration (hours)",
     "start": "Start",
     "stop": "Stop task",
-    "stage": "Native page skeleton; backend commands arrive in later stages."
+    "stage": "Native page skeleton; backend commands arrive in later stages.",
+    "add_next_hint": "Account saved. To start playing, add a session on the Sessions page.",
+    "add_goto_sessions": "Add session"
   },
   "history": {
     "title": "Game History",
@@ -634,7 +636,9 @@
       "privacy": "Account and password are saved only on your own device (configs/config.toml). Aogara never uploads them or ships them in the installer.",
       "added": "{{count}} account(s) added",
       "duplicate": "That email was already added and was not duplicated."
-    }
+    },
+    "load_failed": "Could not read the configuration. Please retry; if it keeps failing, check that the app folder is writable.",
+    "retry": "Retry"
   },
   "bots": {
     "title": "Bots",

@@ -34,3 +34,24 @@ export function withFirstRunCaptureDefault(config: AppConfig): AppConfig {
     capture: { ...config.capture, mode: 'chromium' },
   }
 }
+
+/**
+ * U-02: build the config the wizard writes on Finish.
+ *
+ * The account step persists new accounts to disk via `setup_add_account`
+ * while `draft` remains the mount-time snapshot with an empty pool. If Finish
+ * writes `draft` verbatim those accounts are erased. This helper takes the
+ * LIVE config's pool (read just before Finish) and keeps it, while all other
+ * sections come from `draft` (the user's wizard choices). `first_run_completed`
+ * is flipped here and the selected native bots are applied by the caller.
+ */
+export function withLiveWizardPool(
+  draft: AppConfig,
+  live: AppConfig,
+): AppConfig {
+  return {
+    ...draft,
+    pool: live.pool,
+    general: { ...draft.general, first_run_completed: true },
+  }
+}

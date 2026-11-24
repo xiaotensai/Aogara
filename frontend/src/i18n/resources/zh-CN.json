@@ -36,7 +36,9 @@
     "hours": "时长（小时）",
     "start": "开始对局",
     "stop": "停止任务",
-    "stage": "配置自动保存到 config.toml；换号已原生接入，进房/连打/定时待后续。"
+    "stage": "配置自动保存到 config.toml；换号已原生接入，进房/连打/定时待后续。",
+    "add_next_hint": "账号已保存。想让它开始对局，去「多开会话」添加会话。",
+    "add_goto_sessions": "去建会话"
   },
   "history": {
     "title": "历史记录",
@@ -642,7 +644,9 @@
       "privacy": "账号与密码仅保存在你自己的设备上（configs/config.toml），Aogara 不会上传，也不随安装包分发。",
       "added": "已添加 {{count}} 个账号",
       "duplicate": "该邮箱已添加，未重复加入。"
-    }
+    },
+    "load_failed": "无法读取配置，请重试。若反复失败，请检查程序目录是否可写。",
+    "retry": "重试"
   },
   "bots": {
     "title": "机器人",

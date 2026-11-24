@@ -614,7 +614,9 @@
       "privacy": "帳號與密碼只儲存在你自己的裝置（configs/config.toml），Aogara 不會上傳，也不會隨安裝包散佈。",
       "added": "已新增 {{count}} 個帳號",
       "duplicate": "該信箱已新增，未重複加入。"
-    }
+    },
+    "load_failed": "無法讀取設定，請重試。若持續失敗，請檢查程式目錄是否可寫入。",
+    "retry": "重試"
   },
   "bots": {
     "title": "機器人",

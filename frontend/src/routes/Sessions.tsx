@@ -471,7 +471,7 @@ export function Sessions() {
       const r = await invoke<{ slot: string; cdp_port: number }>('create_session', {
         accountId: pick,
       })
-      toast.success(`已添加 ${pick} → ${r.slot}（端口 ${r.cdp_port}）`)
+      toast.success(`已添加账号到会话 ${r.slot}`)
       setPick('')
       await refresh()
     } catch (e) {
@@ -507,7 +507,7 @@ export function Sessions() {
           </h1>
           <p className="text-sm text-muted-foreground">
             {rows.length} 个会话 · 浏览器 {runningCount} 个已开 · 对局中 {playingCount} 个。
-            每个会话独立浏览器 / profile / CDP / 日志，操作互不影响。
+            每个账号独立运行，浏览器和对局互不干扰。
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void refresh()}>
@@ -589,7 +589,7 @@ export function Sessions() {
         <CardHeader className="pb-2">
           <CardTitle className="text-base">从号池添加会话</CardTitle>
           <CardDescription>
-            每个账号一个会话（独立 profile / 端口 / 日志），最多 {MAX_SESSIONS} 个。添加只建会话，不自动开浏览器。
+            每个账号独立运行、互不干扰，最多 {MAX_SESSIONS} 个。添加后点「打开浏览器」即可开始。
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-end gap-3">
@@ -734,9 +734,12 @@ export function Sessions() {
 
                 <div className="space-y-1 text-xs text-muted-foreground">
                   <div className="flex justify-between gap-2">
-                    <span>端口 / profile</span>
-                    <span className="truncate font-mono">
-                      {row.cdp_port ?? '—'} · {row.profile || '—'}
+                    <span>数据目录</span>
+                    <span
+                      className="truncate font-mono"
+                      title={`调试端口 ${row.cdp_port ?? '—'}`}
+                    >
+                      {row.profile || '—'}
                     </span>
                   </div>
                   <div className="flex justify-between gap-2">

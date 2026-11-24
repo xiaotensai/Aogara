@@ -7,6 +7,7 @@
 // 写配置走 patchPool：取当前 config → 替换 pool 段 → update_config → 更新 store。
 
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Save, Plus, Trash2, Pencil, X, Users } from 'lucide-react'
 
@@ -39,6 +40,7 @@ const FORM_EMPTY = { id: '', label: '', uid: '', email: '', password: '' }
 
 export function Pool() {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const config = useConfigStore((s) => s.config)
   const setConfig = useConfigStore((s) => s.setConfig)
   const pool: PoolConfig = config?.pool ?? EMPTY_POOL
@@ -151,7 +153,10 @@ export function Pool() {
     if (ok) {
       setForm(FORM_EMPTY)
       setShowAdd(false)
-      toast.success(`${t('pool.add_done', '已添加账号')}: ${acc.label}`)
+      toast.success(`${t('pool.add_done', '已添加账号')}: ${acc.label}`, {
+        description: t('pool.add_next_hint', '账号已保存。想让它开始对局，去「多开会话」添加会话。'),
+        action: { label: t('pool.add_goto_sessions', '去建会话'), onClick: () => navigate('/sessions') },
+      })
     }
   }
 

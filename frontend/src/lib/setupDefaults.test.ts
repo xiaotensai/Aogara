@@ -123,3 +123,32 @@ describe('withFirstRunCaptureDefault', () => {
     expect(input.capture.mode).toBe('mitm')
   })
 })
+
+import { withLiveWizardPool } from './setupDefaults'
+
+describe('withLiveWizardPool (U-02 regression)', () => {
+  it('keeps accounts added during the wizard instead of the stale draft pool', () => {
+    const draft = makeConfig({ mode: 'chromium' }) // mount-time snapshot: empty pool
+    const live = makeConfig({ mode: 'chromium' })
+    live.pool.accounts = [{
+      id: 'account-1', label: 'Me', uid: '123', email: 'me@example.com',
+      password: 'pw', login_name: null,
+      coords: {},
+    } as never]
+    live.pool.selected_id = 'account-1'
+
+    const final = withLiveWizardPool(draft, live)
+    expect(final.pool.accounts).toHaveLength(1)
+    expect(final.pool.selected_id).toBe('account-1')
+    expect(final.general.first_run_completed).toBe(true)
+  })
+
+  it('still takes every non-pool section from the draft (wizard choices)', () => {
+    const draft = makeConfig({ mode: 'chromium' })
+    const live = makeConfig({ mode: 'mitm' })
+    const final = withLiveWizardPool(draft, live)
+    expect(final.capture.mode).toBe('chromium') // draft wins, not live
+    expect(final.pool).toEqual(live.pool)        // pool always from live
+    expect(draft.general.first_run_completed).toBe(false) // input not mutated
+  })
+})

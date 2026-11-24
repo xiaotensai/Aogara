@@ -19,7 +19,7 @@ import { invoke } from '@/lib/tauri'
 import { withInstallBlock } from '@/lib/install'
 import { checkApiBeforeSave } from '@/lib/nativeApi'
 import { mergeExternal } from '@/lib/merge'
-import { withFirstRunCaptureDefault } from '@/lib/setupDefaults'
+import { withFirstRunCaptureDefault, withLiveWizardPool } from '@/lib/setupDefaults'
 import { useTauriBridge } from '@/hooks/useTauriBridge'
 import { useConfigStore } from '@/stores/configStore'
 import { ManifestField } from '@/components/ManifestField'
@@ -122,14 +122,42 @@ export function Setup() {
     setDraft((cur) => (cur ? mergeExternal(cur, prev, stored) : stored))
   }, [stored])
 
+  // U-05: get_config failure used to be swallowed, leaving the wizard stuck
+  // on "loading" forever with no explanation. Surface it with a retry.
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [retryTick, setRetryTick] = useState(0)
+
   useEffect(() => {
     if (!stored) {
-      invoke<AppConfig>('get_config').then(setStored).catch(() => {})
+      setLoadError(null)
+      invoke<AppConfig>('get_config')
+        .then((cfg) => { setStored(cfg); setLoadError(null) })
+        .catch((e) => setLoadError(String(e)))
     }
-  }, [stored, setStored])
+  }, [stored, setStored, retryTick])
 
   if (!draft) {
-    return <div className="p-6 text-muted-foreground">{t('setup.loading')}</div>
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        {loadError ? (
+          <>
+            <p className="text-sm text-destructive">
+              {t('setup.load_failed', '无法读取配置，请重试。若反复失败，请检查程序目录是否可写。')}
+            </p>
+            <p className="text-xs text-muted-foreground">{loadError}</p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRetryTick((n) => n + 1)}
+            >
+              {t('setup.retry', '重试')}
+            </Button>
+          </>
+        ) : (
+          <p className="text-muted-foreground">{t('setup.loading')}</p>
+        )}
+      </div>
+    )
   }
 
   const idx = STEPS.indexOf(step)
@@ -221,9 +249,25 @@ export function Setup() {
       const has4p = installed.some((b) => b.name === BOT_4P_NAME)
       const has3p = installed.some((b) => b.name === BOT_3P_NAME)
 
+      // U-02: the account step already persisted accounts via
+      // `setup_add_account` (disk + slot1 memory). `draft` is still the
+      // mount-time snapshot with an EMPTY pool, so blindly writing it here
+      // would erase those accounts. Re-read the live config and keep its
+      // `pool` section, while every other section still comes from `draft`
+      // (the user's wizard choices on platform/mode/config/configure steps).
+      // Guarded: if the read fails we fall back to draft rather than losing
+      // the whole wizard, but log it so the loss is visible in diagnostics.
+      let livePool = draft.pool
+      try {
+        const live = await invoke<AppConfig>('get_config')
+        livePool = live.pool
+      } catch (e) {
+        console.warn('[setup] get_config before finish failed; pool from draft may be stale:', e)
+      }
+
+      const pooled = withLiveWizardPool(draft, { ...draft, pool: livePool })
       const final: AppConfig = {
-        ...draft,
-        general: { ...draft.general, first_run_completed: true },
+        ...pooled,
         bot: {
           ...draft.bot,
           // Enable the assistant on setup completion: there's always a working
@@ -530,31 +574,38 @@ function WelcomeStep() {
         {t('setup.welcome.body2')}
       </p>
 
-      {/* Official project links — surfaced early so a fresh user can
-          find the canonical repo / community before going any further.
-          Intentionally low-key (no banner / colour) since these are
-          informational, not warnings. */}
-      <div className="flex flex-wrap items-center gap-2 mt-1">
-        <span className="text-xs text-muted-foreground mr-1">
-          {t('setup.welcome.links_label')}
-        </span>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => openExternal(AOGARA_GITHUB_URL)}
-        >
-          <GithubMark className="h-4 w-4 mr-1.5" />
-          GitHub
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => openExternal(AOGARA_DISCORD_URL)}
-        >
-          <DiscordMark className="h-4 w-4 mr-1.5" />
-          Discord
-        </Button>
-      </div>
+      {/* Official project links — only render when a URL is actually set.
+          Aogara ships with community links empty by default; showing dead
+          buttons (especially the Discord mark) looks like an unfinished
+          port. openExternal() no-ops on empty strings, but hiding the whole
+          control is the correct UX: no URL => no button, no label. */}
+      {(AOGARA_GITHUB_URL || AOGARA_DISCORD_URL) && (
+        <div className="flex flex-wrap items-center gap-2 mt-1">
+          <span className="text-xs text-muted-foreground mr-1">
+            {t('setup.welcome.links_label')}
+          </span>
+          {AOGARA_GITHUB_URL && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => openExternal(AOGARA_GITHUB_URL)}
+            >
+              <GithubMark className="h-4 w-4 mr-1.5" />
+              GitHub
+            </Button>
+          )}
+          {AOGARA_DISCORD_URL && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => openExternal(AOGARA_DISCORD_URL)}
+            >
+              <DiscordMark className="h-4 w-4 mr-1.5" />
+              Discord
+            </Button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1022,29 +1073,32 @@ function ConfigureBotsStep({
             {t('setup.configure.normal_desc')}
           </p>
 
-          {/* The Mortal weights bundled in the GitHub release are a
-              placeholder forced by GitHub's file-size limit — they prove
-              the install works but aren't strong enough for real play.
-              Point users at Discord for the real weights. */}
-          <div className="rounded-md border border-indigo-500/40 bg-indigo-500/10 p-3 grid gap-2">
-            <div className="flex items-center gap-2 text-indigo-200 font-semibold text-sm">
-              <DiscordMark className="h-4 w-4" />
-              {t('setup.configure.models_title')}
-            </div>
-            <p className="text-sm text-indigo-100/90">
-              {t('setup.configure.models_body')}
-            </p>
-            <div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => openExternal(AOGARA_DISCORD_URL)}
-              >
-                <DiscordMark className="h-4 w-4 mr-1.5" />
-                {t('setup.configure.models_btn')}
-              </Button>
-            </div>
+      {/* The Mortal weights bundled in the GitHub release are a
+          placeholder forced by GitHub's file-size limit — they prove
+          the install works but aren't strong enough for real play.
+          Point users at Discord for the real weights — but only when a
+          Discord URL is configured; a dead button/mark looks unfinished. */}
+      {AOGARA_DISCORD_URL && (
+        <div className="rounded-md border border-indigo-500/40 bg-indigo-500/10 p-3 grid gap-2">
+          <div className="flex items-center gap-2 text-indigo-200 font-semibold text-sm">
+            <DiscordMark className="h-4 w-4" />
+            {t('setup.configure.models_title')}
           </div>
+          <p className="text-sm text-indigo-100/90">
+            {t('setup.configure.models_body')}
+          </p>
+          <div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => openExternal(AOGARA_DISCORD_URL)}
+            >
+              <DiscordMark className="h-4 w-4 mr-1.5" />
+              {t('setup.configure.models_btn')}
+            </Button>
+          </div>
+        </div>
+      )}
           {wizardBots.map((b) => (
             <BotSettingsForm
               key={b.name}

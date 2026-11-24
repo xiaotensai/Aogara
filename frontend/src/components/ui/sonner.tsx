@@ -37,6 +37,8 @@ type NotifyOpts = {
   description?: string
   duration?: number
   id?: string | number
+  /** Optional action button (e.g. "go to Sessions" after adding an account). */
+  action?: { label: string; onClick: () => void }
 }
 
 function notify(severity: ToastSeverity, message: string, opts: NotifyOpts = {}) {
