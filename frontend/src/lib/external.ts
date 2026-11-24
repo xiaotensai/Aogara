@@ -10,7 +10,7 @@ import { invoke } from '@/lib/tauri'
 // no-ops on an empty string, so leaving them blank is safe.
 // 引子：上轮全量改名把上游链接改成不存在的地址（404）。用户决定暂时留空，
 // 后续接个人仓库/社群。填入时保持四个常量结构不变即可。
-export const AOGARA_GITHUB_URL = ''
+export const AOGARA_GITHUB_URL = 'https://github.com/xiaotensai/Aogara'
 export const AOGARA_DISCORD_URL = ''
 export const AOGARAMS_GITHUB_URL = ''
 export const AOGARAMS_DOWNLOAD_URL = ''
