@@ -1,0 +1,295 @@
+[general]
+first_run_completed = false
+developer_mode = false
+
+[logging]
+dir = "./logs/slot1"
+level = "info"
+all_level = "info"
+
+[logging.inspector]
+mode = "lite"
+flush_ms = 500
+raw_ws = false
+http_bodies = false
+
+[history]
+dir = "./history/slot1"
+
+[multi]
+max_sessions = 8
+start_on_launch = true
+start_capture_on_launch = false
+close_idle_browser_secs = 120
+
+[[multi.sessions]]
+slot = "slot2"
+config = "<安装目录>/app/configs/slot-main.toml"
+enabled = true
+
+[[multi.sessions]]
+slot = "slot3"
+config = "<安装目录>/app/configs/slot-accountN.toml"
+enabled = true
+
+[platform]
+kind = "Majsoul"
+
+[proxy]
+enabled = true
+addr = "127.0.0.1:23410"
+ca_dir = "./ca"
+rewrite_certificate_report = true
+block_telemetry = true
+
+[bot]
+enabled = true
+active_4p = "aogara-native"
+active_3p = "aogara-native3p"
+auto_sync = true
+dir = "mjai_bot"
+
+[bot.api]
+enabled = false
+base_url = "https://mjapi.shinkuan.me"
+key = ""
+model_4p = ""
+model_3p = ""
+proxy_enabled = false
+proxy = ""
+react_timeout_ms = 3000
+
+[capture]
+mode = "chromium"
+
+[capture.chromium]
+executable = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+user_data_dir = ""
+start_url = "https://game.maj-soul.com/1/"
+cft_channel = "stable"
+force_cft = false
+extra_args = [
+    "--remote-debugging-port=63503",
+    "--window-size=1280,720",
+]
+block_telemetry = true
+
+[capture.http]
+record_all = false
+bodies = false
+max_body_bytes = 262144
+static_assets = false
+
+[autoplay]
+enabled = false
+
+[autoplay.majsoul]
+pre_click_delay_min_ms = 1200
+pre_click_delay_max_ms = 5500
+inter_click_delay_ms = [
+    250,
+    500,
+]
+hover_delay_ms = [
+    150,
+    300,
+]
+click_hold_ms = [
+    60,
+    140,
+]
+verify_input_ms = [
+    300,
+    500,
+]
+click_retries = 2
+reload_after_failures = 3
+dealer_first_discard_extra_delay_ms = [
+    2000,
+    3000,
+]
+
+[autoplay.delay]
+mode = "legacy"
+min_delay_ms = [
+    1200,
+    1400,
+]
+min_button_delay_ms = [
+    1600,
+    2600,
+]
+distribution = "log_normal"
+bank_on_long_thought = true
+riichi_extra_ms = 0
+kan_extra_ms = 0
+safety_margin_ms = 1000
+bank_use_fraction = 0.25
+bank_max_single_ms = 5000
+no_budget_cap_ms = 15000
+
+[autoplay.delay.lognormal]
+claim = [
+    0.26,
+    0.57,
+]
+dahai_tedashi = [
+    0.87,
+    0.62,
+]
+dahai_tsumogiri = [
+    0.52,
+    0.53,
+]
+hora = [
+    0.15,
+    0.5,
+]
+post_call_dahai = [
+    0.52,
+    0.42,
+]
+reach = [
+    1.1,
+    0.55,
+]
+
+[overlay]
+enabled = false
+top_n = 3
+opacity = 0.95
+always_on_top = true
+
+[network]
+github_mirror_mode = "auto"
+github_custom_mirror = ""
+
+
+[pool]
+selected_id = "accountN"
+auto_next = false
+timer_enabled = false
+timer_hours = 4.0
+start_capture_on_launch = false
+
+[pool.target]
+room = "copper"
+mode = "mode4e"
+
+[[pool.accounts]]
+id = ""
+label = ""
+uid = ""
+email = ""
+password = ""
+login_name = ""
+
+[pool.accounts.coords]
+again = [
+    0.7671,
+    0.9245,
+]
+back = [
+    0.615,
+    0.25,
+]
+cancel = [
+    0.2528,
+    0.877,
+]
+confirm = [
+    0.9115,
+    0.9245,
+]
+loginEmail = [
+    0.7398,
+    0.2904,
+]
+loginPassword = [
+    0.7398,
+    0.4059,
+]
+loginSubmit = [
+    0.7407,
+    0.5891,
+]
+logout = [
+    0.252,
+    0.845,
+]
+logoutConfirm = [
+    0.41,
+    0.635,
+]
+ranked = [
+    0.7022,
+    0.311,
+]
+settings = [
+    0.964,
+    0.067,
+]
+
+[pool.accounts.coords.modes]
+mode3e = [
+    0.7264,
+    0.6949,
+]
+mode3s = [
+    0.7264,
+    0.82,
+]
+mode4e = [
+    0.7264,
+    0.3874,
+]
+mode4s = [
+    0.7264,
+    0.5415,
+]
+
+[pool.accounts.coords.rooms]
+"玉之间" = [
+    0.7235,
+    0.8358,
+]
+"王座之间" = [
+    0.7235,
+    0.989,
+]
+"金之间" = [
+    0.7235,
+    0.6823,
+]
+"铜之间" = [
+    0.7235,
+    0.3754,
+]
+"银之间" = [
+    0.7235,
+    0.5288,
+]
+
+[test]
+enabled = false
+auto_start = false
+resume = true
+rounds = 3
+accounts = []
+room = ""
+mode = ""
+force_exit = "none"
+exit_phases = [
+    "page_load",
+    "login",
+    "lobby",
+    "entering",
+    "in_game",
+    "settlement",
+]
+exit_delay_min_ms = 200
+exit_delay_max_ms = 4000
+monitor_interval_ms = 1000
+heartbeat_secs = 10
+max_match_secs = 900
+log_dir = "./logs/test"

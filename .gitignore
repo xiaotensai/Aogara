@@ -1,0 +1,83 @@
+venv
+__pycache__
+target
+node_modules
+.assets
+
+# Release-signing secret key (public half is tracked as minisign.pub)
+secrets/
+
+# Claude
+.claude
+CLAUDE.md
+claude*.md
+*mcp.json
+AGENTS.md
+agent*.md
+.agents
+.codex
+
+# Reference
+reference
+reference*.md
+
+# Runtime data
+ca/
+logs/
+
+# Per-bot uv venvs and stamp files (managed by Akagi)
+mjai_bot/*/.akagi/
+mjai_bot/*/uv.lock
+mjai_bot/*/.venv/
+
+# Per-bot user-edited settings (manifest.toml ships with the bot; settings.toml does not)
+mjai_bot/*/settings.toml
+
+# Tauri
+gen/
+
+# Packaging output (scripts/package-zip.sh)
+dist/
+
+# Bundled python + uv binaries fetched by scripts/fetch-runtime.sh.
+runtime/*
+!runtime/.gitkeep
+
+# util
+mjai_bot/mortal*
+
+# Locally-built bot release artifacts
+mortal.zip
+*.bot.zip
+tests/mortal_zip_layout.rs
+
+# Test
+test
+
+# Local release helper
+scripts/tag_release.sh
+
+# Training-data shards written by native_bot's extractor (see native_bot/train/README.md).
+# Tens of GB of intermediate binaries; the trained weights are what gets committed.
+native_bot/out/
+
+# Mimosa security-scan history (see ~/.mimosa fallback when absent)
+.mimosa
+
+# ZCode session artifacts
+.zcode/
+
+# Aogara public-repo additions: private runtime data must never be committed
+config.toml
+configs/
+profiles/
+credentials/
+*.key
+*.pem
+accounts.json
+docs/archive/
+app/
+_setup/
+backups/
+backup/
+test-config/

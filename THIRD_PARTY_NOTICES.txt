@@ -1,0 +1,30 @@
+Aogara - Third Party Notices
+============================
+
+This product includes software from third parties. The original license texts
+are distributed alongside the components inside runtime/ where available.
+
+1. Akagi (upstream project)
+   - License: Apache License 2.0
+   - See LICENSE.txt and NOTICE in this package.
+
+2. Python (runtime/python/)
+   - License: Python Software Foundation License (PSF), compatible with
+     Apache-2.0 for distribution. Full text is included with the runtime at
+     runtime/python/<triple>/LICENSE.txt where present.
+   - Homepage: https://www.python.org/
+
+3. uv (runtime/uv/)
+   - License: Apache-2.0 OR MIT (dual-licensed by Astral).
+   - Homepage: https://github.com/astral-sh/uv
+
+4. Bundled Python site-packages (pip vendors, certifi, idna, etc.)
+   - Each package ships its own LICENSE file under
+     runtime/python/<triple>/Lib/site-packages/<pkg>/LICENSE*.
+   - Refer to those files for the exact terms.
+
+5. Bot components (mjai_bot/, native_bot/)
+   - Refer to the LICENSE/NOTICE files within each bot directory if present.
+
+This notice is provided for informational purposes. Where a component's own
+license file is present, that file governs.
