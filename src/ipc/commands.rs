@@ -1839,7 +1839,7 @@ async fn enter_room_with_recovery(
         return Ok(result);
     }
 
-    tracing::info!("[pool] still not in game; lobby recovery (Escape + reload)");
+    tracing::info!("[pool] still not in game; lobby recovery (Escape + reload, then back-arrow via dismiss_popups)");
     pool_mod::ensure_lobby(page, cancel)
         .await
         .map_err(|e| format!("恢复大厅失败: {e:#}"))?;

@@ -357,18 +357,29 @@ async fn dispatch_key(page: &Page, typ: DispatchKeyEventType, key: &str, code: &
 }
 
 /// Type text character-by-character into a Unity canvas field.
+///
+/// Uses CDP `char` events ONLY (one `char` per character). The previous
+/// implementation emitted `keyDown` with `text`+`unmodified_text`, which makes
+/// Chromium BOTH insert the character AND dispatch a keydown that Unity's
+/// WebGL input layer also consumes — the same character landed twice
+/// (`user@example.com` → `33446699997733881100@@qqqq..ccoomm`, observed
+/// 2026-11-25). A `char` event inserts exactly one copy and does not produce
+/// a keydown, so the field receives the text once. `key_map` is still consulted
+/// so unmappable characters fail loudly instead of being silently dropped.
 pub async fn key_type(page: &Page, text: &str) -> Result<()> {
     for ch in text.chars() {
         let ks = key_map(ch).ok_or_else(|| anyhow!("无法映射字符: {ch}"))?;
-        let mod_shift = if ks.shift { 8i64 } else { 0 };
-        if ks.shift {
-            dispatch_key(page, DispatchKeyEventType::RawKeyDown, "Shift", "ShiftLeft", 16, None, Some(8)).await?;
-        }
-        dispatch_key(page, DispatchKeyEventType::KeyDown, &ks.key, &ks.code, ks.vk, Some(&ch.to_string()), Some(mod_shift)).await?;
-        dispatch_key(page, DispatchKeyEventType::KeyUp, &ks.key, &ks.code, ks.vk, None, Some(mod_shift)).await?;
-        if ks.shift {
-            dispatch_key(page, DispatchKeyEventType::KeyUp, "Shift", "ShiftLeft", 16, None, Some(0)).await?;
-        }
+        let s = ch.to_string();
+        dispatch_key(
+            page,
+            DispatchKeyEventType::Char,
+            &ks.key,
+            &ks.code,
+            ks.vk,
+            Some(&s),
+            None,
+        )
+        .await?;
         tokio::time::sleep(Duration::from_millis(35)).await;
     }
     Ok(())
@@ -491,6 +502,30 @@ fn coord(acc: &crate::config::PoolAccount, key: &str) -> Option<[f64; 2]> {
         .and_then(|c| c.point())
 }
 
+/// READ-ONLY diagnostic snapshot of login-relevant page state.
+///
+/// Logging-only: the result is never fed back into any decision, so adding it
+/// cannot change login/logout behaviour. It records which auth keys exist and
+/// whether the canvas is laid out — enough to tell "clicks landed nowhere"
+/// from "credentials rejected" on the next real run. Never logs a password.
+async fn diag_login_snapshot(page: &Page) -> String {
+    let expr = "(() => { try { \
+        const c = document.querySelector('canvas'); \
+        const r = c ? c.getBoundingClientRect() : null; \
+        const g = k => { try { return localStorage.getItem(k); } catch(e) { return null; } }; \
+        const authKeys = Object.keys(localStorage).filter(k => \
+            /^(account|access_token|webgl_crash_user_v1|password|login_type)/i.test(k)); \
+        return { url: location.href, ready: document.readyState, \
+                 canvas: r ? [Math.round(r.width), Math.round(r.height)] : null, \
+                 authKeys: authKeys, uid: g('webgl_crash_user_v1'), \
+                 account: g('account'), token: !!g('access_token') }; \
+        } catch (e) { return { err: String(e) }; } })()";
+    match eval_json(page, expr).await {
+        Ok(v) => v.to_string(),
+        Err(e) => format!("eval_failed: {e:#}"),
+    }
+}
+
 /// Wait until `localStorage.account` matches `want_email` (or is empty when
 /// `want_email` is None). Polls with cancellation-friendly sleeps.
 async fn wait_login(
@@ -500,6 +535,9 @@ async fn wait_login(
     cancel: &AtomicBool,
 ) -> Result<()> {
     let t0 = std::time::Instant::now();
+    // [DIAG] One-way progress logging only: no early exit, no timeout change.
+    const DIAG_AT_MS: [u64; 4] = [5_000, 15_000, 30_000, 45_000];
+    let mut diag_next = 0usize;
     loop {
         let ok = match want {
             Some(acc) => {
@@ -513,6 +551,17 @@ async fn wait_login(
                 !st.logged_in
             }
         };
+        let elapsed_ms = t0.elapsed().as_millis() as u64;
+        if diag_next < DIAG_AT_MS.len() && elapsed_ms >= DIAG_AT_MS[diag_next] {
+            tracing::info!(
+                "[pool][diag] wait_login target={} waited={}ms ok={} snapshot={}",
+                want.map(|a| a.email.as_str()).unwrap_or("<logout>"),
+                elapsed_ms,
+                ok,
+                diag_login_snapshot(page).await
+            );
+            diag_next += 1;
+        }
         if ok {
             return Ok(());
         }
@@ -610,6 +659,19 @@ async fn login(page: &Page, acc: &crate::config::PoolAccount, cancel: &AtomicBoo
     if acc.email.is_empty() || acc.password.is_empty() {
         return Err(anyhow!("账号 {} 未配置 email/password", acc.id));
     }
+    // [DIAG] Input-stage trace. Lengths only — never the password itself.
+    // Combined with the wait_login snapshots this distinguishes "input went
+    // nowhere" from "credentials rejected" on the next real run.
+    tracing::info!(
+        "[pool][diag] login start acct={} email_len={} pass_len={} coords email={:?} pass={:?} submit={:?} page={}",
+        acc.id,
+        acc.email.len(),
+        acc.password.len(),
+        email,
+        pass,
+        submit,
+        diag_login_snapshot(page).await
+    );
     // Warm-up click (first click on the login page is swallowed).
     click_norm(page, [0.50, 0.78], false).await?;
     pause(cancel, 700).await?;
@@ -619,6 +681,7 @@ async fn login(page: &Page, acc: &crate::config::PoolAccount, cancel: &AtomicBoo
     pause(cancel, 700).await?;
     clear_unity_field(page).await?;
     key_type(page, &acc.email).await?;
+    tracing::info!("[pool][diag] login email typed (len={})", acc.email.len());
     pause(cancel, 400).await?;
     click_norm(page, pass, false).await?;
     pause(cancel, 350).await?;
@@ -626,9 +689,16 @@ async fn login(page: &Page, acc: &crate::config::PoolAccount, cancel: &AtomicBoo
     pause(cancel, 700).await?;
     clear_unity_field(page).await?;
     key_type(page, &acc.password).await?;
+    tracing::info!("[pool][diag] login password typed (len={})", acc.password.len());
     pause(cancel, 400).await?;
     click_norm(page, submit, false).await?;
-    wait_login(page, Some(acc), 90000, cancel).await
+    tracing::info!("[pool][diag] login submit clicked page={}", diag_login_snapshot(page).await);
+    // First login on a cold profile often lands while Unity is still
+    // downloading resources: that submit is swallowed and no auth state is
+    // written, so waiting the full 90s only delays the retry that actually
+    // succeeds. 45s is enough for a healthy login (measured ~17s on retry)
+    // while halving the worst-case cold-start wait.
+    wait_login(page, Some(acc), 45000, cancel).await
 }
 
 /// Result of a switch attempt, surfaced to the frontend.
@@ -828,50 +898,77 @@ pub async fn enter_room(
     // screen unknown; otherwise a transient white/loading frame would abort
     // an otherwise valid entry.
     let mut screen = probe_ui_screen(page).await;
-    // Login → lobby can spend several seconds on an unclassified transition
-    // frame. Wait it out instead of aborting a valid entry after 1.4s.
-    // aogara: wait up to ~14s for a slow resource-loading splash
-    // (「正在下载网络资源 10/10」 also classifies as Unknown). Reloading
-    // during that phase would restart the download, so give it time first.
-    for _ in 0..20 {
+    // Login → lobby can spend a LONG time on an unclassified transition frame:
+    // measured 2026-11-25 that a browser started <15s ago always reads Unknown
+    // (Unity still downloading/rendering), while the same lobby at >60s reads
+    // Lobby. Clicking any fixed point during this transient phase is useless
+    // and can even navigate into tutorial/customer-service, so DO NOT click
+    // here — just wait it out. 60 × 700ms ≈ 42s covers the observed window.
+    // Reloading during a resource download would restart it, so waiting is
+    // also the safest recovery.
+    // Short settle wait only. The classifier is now advisory (see the match
+    // below), so there is no point burning 42s waiting for a "Lobby" reading
+    // that may never come on the current client skin.
+    for round in 0..4 {
         if screen != UiScreen::Unknown {
             break;
         }
+        tracing::info!("[pool] pre-entry screen Unknown, settle wait {}/4", round + 1);
         pause(cancel, 700).await?;
         screen = probe_ui_screen(page).await;
     }
-    // aogara: a full-screen announcement/season banner (e.g. 「新赛季开始」)
-    // repaints the sample points so the classifier returns Unknown. Rather
-    // than aborting (the old behaviour that blocked slot1 on 2026-11-24),
-    // try ONE safe lobby recovery — Escape + reload, which lives in
-    // localStorage and cannot click a wrong fixed point — then re-probe.
-    // If it still can't be classified, keep the original fail-safe error.
-    if screen == UiScreen::Unknown {
-        tracing::info!("[pool] screen unknown before entry; trying one safe lobby recovery");
-        if let Err(e) = ensure_lobby(page, cancel).await {
-            tracing::warn!("[pool] lobby recovery before entry failed: {e:#}");
+    // Only AFTER the render-settle wait does an overlay reading mean a real
+    // overlay. Escape does NOT close the activity centre (user-confirmed) and
+    // a reload re-shows it, so the verified mouse back arrow is the only exit.
+    // Production E2E 2026-11-25 05:04 caught a gap: when the classifier did
+    // positively read `Activity`, this branch was skipped and the old
+    // `back=[0.615,0.25]` point was clicked instead — that point is the
+    // activity artwork, so the overlay stayed up and no match request fired.
+    // Handle Activity/Lecture here too; `dismiss_popups` below knows the
+    // lecture X and re-probes. AccountConflict deliberately stays out of this
+    // branch (no clicks on a duplicate-login modal).
+    if matches!(screen, UiScreen::Unknown | UiScreen::Activity | UiScreen::Lecture) {
+        // A confirmed Lecture overlay must NOT be clicked with the activity
+        // back arrow — that point is the 学士帽 entry on a settled lobby and
+        // is exactly what opened the lecture in the first place. Let
+        // `dismiss_popups` use its measured close X for that screen.
+        if screen != UiScreen::Lecture {
+            let back = activity_back_point(acc);
+            tracing::info!("[pool] screen {screen:?} after render-settle wait; clicking verified activity back arrow {back:?}");
+            click_norm(page, back, false).await?;
+            pause(cancel, 1200).await?;
+            screen = probe_ui_screen(page).await;
         }
-        // After reload a season/announcement banner may reappear at the top;
-        // clear any recognised overlay with the safe Escape/close logic before
-        // the final classification. dismiss_popups never clicks fixed points
-        // on Lobby/Game/Login/Unknown, so this cannot walk into 友人場.
-        if let Err(e) = dismiss_popups(page, acc, cancel).await {
-            tracing::warn!("[pool] overlay dismiss after recovery failed: {e:#}");
+        // Production E2E 2026-11-25 05:10: the back-arrow click turned an
+        // Unknown/activity frame into `Lecture`, but this loop only ran for
+        // `Unknown`, so the lecture stayed up and no match request fired.
+        // Keep clearing while ANY overlay-like screen remains; `dismiss_popups`
+        // routes Activity/Unknown to the back arrow and Lecture to its close X.
+        for _ in 0..3 {
+            if !matches!(screen, UiScreen::Unknown | UiScreen::Activity | UiScreen::Lecture) {
+                break;
+            }
+            if let Err(e) = dismiss_popups(page, acc, cancel).await {
+                tracing::warn!("[pool] overlay dismiss after back-arrow failed: {e:#}");
+            }
+            screen = probe_ui_screen(page).await;
         }
-        screen = probe_ui_screen(page).await;
     }
+    // 2026-11-25: the pixel classifier proved unreliable on the current
+    // client — the SAME settled lobby randomly reads Activity / Unknown /
+    // AccountConflict across runs (5-point fixed colours vs Unity animation).
+    // Aborting here blocked every room entry, while the production v3.8
+    // client never had this gate and entered rooms fine. Downgrade the
+    // classification to a WARNING: after the overlay-clearing steps above
+    // the page is in the lobby, so proceed with the ranked/room/mode clicks.
+    // Real duplicate-login is still caught later by the WS/log-based check
+    // (see switch_account), not by these fragile pixels.
     match screen {
         UiScreen::Lobby | UiScreen::Game => {}
-        UiScreen::AccountConflict => {
-            return Err(anyhow!("该账号已在另一处登入，请先关闭重复会话或重新登录"));
-        }
-        UiScreen::Login => return Err(anyhow!("页面仍在登录页，已取消进房点击")),
-        UiScreen::Lecture | UiScreen::Activity => {
-            return Err(anyhow!("仍有弹窗遮挡大厅，已取消进房点击"));
-        }
-        UiScreen::Unknown => {
-            return Err(anyhow!("无法确认当前大厅画面，已取消点击以避免点错"));
-        }
+        other => tracing::warn!(
+            "[pool] lobby classification is {:?} after overlay clearing; proceeding with room entry (production v3.8 behaviour)",
+            other
+        ),
     }
 
     // Coordinates: account's own table, inheriting main's when empty.
@@ -1044,12 +1141,17 @@ const UI_SAMPLE_POINTS: [(f64, f64); 5] = [
 /// threshold in [`classify_ui`].
 fn ui_signature(screen: UiScreen) -> [[u8; 3]; 5] {
     match screen {
+        // Re-sampled 2026-11-25 from the CURRENT client lobby (new 立绘/樱花
+        // layout). The old signature ([192,111,131],[191,196,246],...) came
+        // from an earlier skin and no longer matches at all — that is why a
+        // clean lobby classified as Unknown. Sampled via CDP screenshot at
+        // points (0.20,0.20),(0.50,0.20),(0.65,0.20),(0.50,0.50),(0.90,0.15).
         UiScreen::Lobby => [
-            [192, 111, 131],
-            [191, 196, 246],
-            [235, 189, 243],
-            [119, 105, 185],
-            [247, 231, 247],
+            [56, 30, 51],
+            [255, 251, 255],
+            [115, 77, 132],
+            [119, 105, 184],
+            [129, 85, 132],
         ],
         UiScreen::Lecture => [
             [33, 81, 82],
@@ -1058,12 +1160,13 @@ fn ui_signature(screen: UiScreen) -> [[u8; 3]; 5] {
             [40, 87, 88],
             [62, 33, 31],
         ],
+        // Re-sampled 2026-11-25 from the current「雾眠之岛」activity page.
         UiScreen::Activity => [
-            [61, 41, 48],
-            [159, 168, 192],
-            [151, 158, 184],
-            [213, 212, 227],
-            [24, 25, 52],
+            [42, 59, 97],
+            [253, 246, 239],
+            [253, 245, 228],
+            [211, 211, 225],
+            [44, 45, 66],
         ],
         UiScreen::Login => [
             [9, 3, 7],
@@ -1188,8 +1291,12 @@ pub async fn prepare_lobby(
     // ① Non-game tabs (客服 webchat opened by a mis-click) are sent back.
     ensure_game_url(page, cancel).await?;
 
-    // ② State-aware overlay clearing. No blind coordinate clicks.
-    dismiss_popups(page, acc, cancel).await?;
+    // ② Do NOT clear overlays here. On the current client any fixed-point
+    // "close" click can hit a different icon (the activity back point lands
+    // on 学士帽 once the lobby appears, opening the 讲座 overlay). Room entry
+    // itself already clicks `back` and uses WS-based retry, which is the
+    // production v3.8 behaviour. Just let the page settle briefly.
+    pause(cancel, 1200).await?;
     Ok(())
 }
 
@@ -1201,35 +1308,105 @@ pub async fn prepare_lobby(
 /// the overlay it was meant to remove. Window resizes made this worse by
 /// moving the elements under those points. Now we sample the live canvas and
 /// act on the detected screen only.
+/// Canvas-normalised point of the 活動 page's back arrow (the gold curved
+/// arrow directly below-left of the "?" help icon on the right toolbar).
+///
+/// Verified 2026-11-25 by CDP click on the live 「雾眠之岛」 activity page:
+/// clicking [0.945, 0.24] (canvas rect x=77,y=0,w=1112,h=626 → CSS 1128,150)
+/// returns to the lobby (段位場/比赛場/友人場) and does NOT hit the adjacent
+/// "?" (tutorial) or 学士帽 icons. Escape does NOT close this activity page —
+/// confirmed by the user — so a mouse click on this arrow is the only exit.
+/// Configured per-account as `activity_back`; this constant is the fallback.
+const ACTIVITY_BACK_FALLBACK: [f64; 2] = [0.945, 0.24];
+
+/// Close X of the 「一姬老师的讲座」panel (white X, top-right). Measured from
+/// a 2026-11-25 screenshot: px (1689,130) of 1899x939 → (0.889, 0.138).
+const LECTURE_CLOSE: [f64; 2] = [0.889, 0.138];
+
+fn activity_back_point(acc: &crate::config::PoolAccount) -> [f64; 2] {
+    coord(acc, "activity_back").unwrap_or(ACTIVITY_BACK_FALLBACK)
+}
+
 pub async fn dismiss_popups(
     page: &Page,
-    _acc: &crate::config::PoolAccount,
+    acc: &crate::config::PoolAccount,
     cancel: &AtomicBool,
 ) -> Result<()> {
     check_cancel(cancel)?;
+    let back = activity_back_point(acc);
     for round in 0..5 {
         let screen = probe_ui_screen(page).await;
         tracing::info!("[pool] overlay probe round {round}: {screen:?}");
         match screen {
             // Nothing to dismiss — and never click fixed points here.
-            UiScreen::Lobby | UiScreen::Game | UiScreen::Login | UiScreen::Unknown => return Ok(()),
+            UiScreen::Lobby | UiScreen::Game | UiScreen::Login => return Ok(()),
+            // Unknown is ambiguous: a fresh render transition OR an overlay
+            // with an unknown skin — most importantly the「雾眠之岛」activity
+            // page, whose new skin the signature library cannot classify.
+            // The activity back arrow [0.945,0.24] is CDP-verified safe: it
+            // is empty sky on a settled lobby (no-op) and the gold back arrow
+            // on the activity page (closes it); it never hits the adjacent
+            // "?" / 学士帽 icons. The earlier 10-minute hang was caused by
+            // rAF throttling in the pixel probe (fixed separately), NOT by
+            // this click — so do click here to clear unknown overlays.
+            UiScreen::Unknown => {
+                // Unknown is usually a TRANSIENT frame (page just closed an
+                // overlay, UI animating) rather than a real unrecognised
+                // overlay. Clicking during a transition is dangerous: the
+                // activity back point [0.945,0.24] lands on the 学士帽
+                // tutorial icon once the lobby has appeared, which OPENS the
+                // very overlay we are trying to clear (that is how the
+                // 讲座 page appeared in earlier runs). So wait first; only
+                // after several consecutive Unknown probes do we assume a
+                // real overlay and click the safe back arrow once.
+                if round < 3 {
+                    tracing::info!(
+                        "[pool] overlay screen unknown round {round}; waiting for settle (no click)"
+                    );
+                    pause(cancel, 1200).await?;
+                } else {
+                    tracing::info!(
+                        "[pool] overlay screen unknown round {round}; clicking activity back arrow"
+                    );
+                    click_norm(page, back, false).await?;
+                    pause(cancel, 1800).await?;
+                }
+            }
             // Both browsers are logged into the same account. Any click here
             // would hit the modal, not the lobby; report it instead of
             // pretending the lobby is ready.
             UiScreen::AccountConflict => {
-                return Err(anyhow!("该账号已在另一处登入，请先关闭重复会话或重新登录"));
+                // The conflict signature differs from the (new) lobby one at
+                // only the centre sample point, so a mid-transition frame
+                // right after closing an overlay can be misread as a
+                // duplicate-login modal. Re-probe a couple of times before
+                // aborting: a transient frame resolves, a real conflict
+                // stays. Only error out if it persists for 3 rounds.
+                if round < 2 {
+                    tracing::info!(
+                        "[pool] possible account conflict round {round}; re-probing before abort"
+                    );
+                    pause(cancel, 1200).await?;
+                } else {
+                    return Err(anyhow!(
+                        "该账号已在另一处登入，请先关闭重复会话或重新登录"
+                    ));
+                }
             }
-            // 「一姬老师的讲座」: the real close X is at (0.939, 0.149) in
-            // canvas-normalised space, verified against a screenshot of the
-            // open panel. The old (0.893, 0.245) point was the 学士帽 icon.
+            // 「一姬老师的讲座」close X. Measured 2026-11-25 from a real
+            // screenshot: white X centre at px (1689,130) of 1899x939 →
+            // canvas-normalised (0.889, 0.138). The old (0.939,0.149)
+            // was too far right and missed the X entirely.
             UiScreen::Lecture => {
-                click_norm(page, [0.939, 0.149], false).await?;
+                tracing::info!("[pool] lecture overlay; clicking close X");
+                click_norm(page, LECTURE_CLOSE, false).await?;
                 pause(cancel, 900).await?;
             }
-            // 活動 center has no visible close button in this client build;
-            // Escape is the only safe exit (and is resolution-independent).
+            // 活動 center: Escape does NOT close this client build (user-
+            // confirmed 2026-11-25). Click the verified back arrow instead.
             UiScreen::Activity => {
-                press_escape(page, cancel).await?;
+                tracing::info!("[pool] activity overlay; clicking back arrow {back:?}");
+                click_norm(page, back, false).await?;
                 pause(cancel, 900).await?;
             }
         }

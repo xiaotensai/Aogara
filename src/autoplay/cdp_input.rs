@@ -13,8 +13,13 @@ use anyhow::{anyhow, Context, Result};
 use chromiumoxide::cdp::browser_protocol::input::{
     DispatchMouseEventParams, DispatchMouseEventType, MouseButton,
 };
+use chromiumoxide::cdp::browser_protocol::page::{
+    CaptureScreenshotFormat, CaptureScreenshotParams,
+};
 use chromiumoxide::layout::Point;
 use chromiumoxide::page::Page;
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use std::io::Cursor;
 use std::time::Duration;
 
 /// Dispatch a single mouse click at `(x, y)` (CSS pixels) as four CDP
@@ -157,32 +162,86 @@ pub async fn click_canvas_norm(
 
 /// Sample the live Unity frame at 0..1 canvas-normalised points.
 ///
-/// Majsoul's lobby/overlays are drawn entirely inside the WebGL canvas, so
-/// there is no DOM to inspect. Reading pixels inside `requestAnimationFrame`
-/// is the only reliable way to tell which screen is actually visible; the
-/// drawing buffer is cleared outside a frame (a plain `readPixels` returns
-/// black). Sampling in canvas-normalised coordinates makes this independent
-/// of window size and device pixel ratio.
+/// 2026-11-25 root cause (measured on the real page): Majsoul runs with
+/// `preserveDrawingBuffer: false`. When the tab is in the background the
+/// compositor still shows the full lobby, but JS-side `gl.readPixels` /
+/// `drawImage(canvas)` both return ALL BLACK (drawing buffer cleared), and
+/// `requestAnimationFrame` is throttled to ~1 callback per 26 seconds. So no
+/// JS read method can classify the screen reliably; the probe always read
+/// Unknown and the room-entry chain aborted with "无法确认当前大厅画面".
+///
+/// Fix: read pixels from a CDP `Page.captureScreenshot` instead. Screenshots
+/// come from the compositor, which always has the real frame; we clip to the
+/// canvas CSS rect so the existing canvas-normalised sample points still
+/// apply. WebGL readPixels is kept only as a fast fallback if a screenshot
+/// cannot be taken.
 pub async fn read_canvas_pixels(page: &Page, points: &[(f64, f64)]) -> Result<Vec<[u8; 3]>> {
+    match read_pixels_via_screenshot(page, points).await {
+        Ok(samples) => return Ok(samples),
+        Err(e) => tracing::debug!("[cdp] screenshot pixel read failed, using WebGL: {e:#}"),
+    }
+    read_pixels_via_webgl(page, points).await
+}
+
+/// Primary: clip a CDP screenshot to the canvas and sample it. The compositor
+/// retains the visible frame even for a backgrounded WebGL canvas.
+async fn read_pixels_via_screenshot(page: &Page, points: &[(f64, f64)]) -> Result<Vec<[u8; 3]>> {
+    let rect = evaluate_canvas_rect(page).await?;
+    let clip = chromiumoxide::cdp::browser_protocol::page::Viewport::builder()
+        .x(rect.x)
+        .y(rect.y)
+        .width(rect.width)
+        .height(rect.height)
+        .scale(1.0)
+        .build()
+        .map_err(|e| anyhow!("build screenshot clip: {e}"))?;
+    let params = CaptureScreenshotParams::builder()
+        .format(CaptureScreenshotFormat::Png)
+        .clip(clip)
+        .from_surface(true)
+        .build();
+    let shot = tokio::time::timeout(Duration::from_millis(10_000), page.execute(params))
+        .await
+        .map_err(|_| anyhow!("captureScreenshot timed out"))?
+        .context("CDP captureScreenshot")?;
+    // CDP returns base64-encoded PNG text in `Binary`.
+    let b64: &str = shot.data.as_ref();
+    let bytes = BASE64.decode(b64).context("decode screenshot base64")?;
+    let decoder = png::Decoder::new(Cursor::new(bytes));
+    let mut reader = decoder.read_info().context("decode screenshot png")?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).context("read screenshot frame")?;
+    let (w, h, bpp) = (info.width as usize, info.height as usize, info.color_type.samples());
+    let mut out = Vec::with_capacity(points.len());
+    for &(nx, ny) in points {
+        let px = (nx.clamp(0.0, 1.0) * (w - 1) as f64).round() as usize;
+        // canvas-normalised ny=0 is TOP; image rows run top-to-bottom directly.
+        let py = (ny.clamp(0.0, 1.0) * (h - 1) as f64).round() as usize;
+        let i = (py * w + px) * bpp;
+        if i + 2 >= buf.len() {
+            return Err(anyhow!("screenshot sample out of bounds"));
+        }
+        out.push([buf[i], buf[i + 1], buf[i + 2]]);
+    }
+    Ok(out)
+}
+
+/// Fallback: synchronous WebGL readPixels (may be black on a background tab).
+async fn read_pixels_via_webgl(page: &Page, points: &[(f64, f64)]) -> Result<Vec<[u8; 3]>> {
     let pts = serde_json::to_string(points).context("encode canvas sample points")?;
-    let expr = format!(
-        "new Promise(resolve=>requestAnimationFrame(()=>{{const c=document.getElementById('unity-canvas')||document.getElementsByTagName('canvas')[0];\
-         if(!c){{resolve(null);return;}}const gl=c.getContext('webgl2')||c.getContext('webgl');\
-         if(!gl){{resolve(null);return;}}resolve({pts}.map(([nx,ny])=>{{\
+    let body = format!(
+        "(()=>{{const c=document.getElementsByTagName('canvas')[0];\
+         if(!c){{return null;}}const gl=c.getContext('webgl2')||c.getContext('webgl');\
+         if(!gl){{return null;}}return {pts}.map(([nx,ny])=>{{\
          const x=Math.max(0,Math.min(c.width-1,Math.floor(nx*c.width)));\
          const y=Math.max(0,Math.min(c.height-1,Math.floor((1-ny)*c.height)));\
          const b=new Uint8Array(4);gl.readPixels(x,y,1,1,gl.RGBA,gl.UNSIGNED_BYTE,b);\
-         return [b[0],b[1],b[2]];}}));}}))"
+         return [b[0],b[1],b[2]];}});}})()"
     );
-    // A backgrounded/minimised tab may never service requestAnimationFrame.
-    // Do not let a screen probe block the whole pool command forever.
-    let result = tokio::time::timeout(
-        Duration::from_millis(2500),
-        page.evaluate(expr.as_str()),
-    )
-    .await
-    .map_err(|_| anyhow!("canvas pixels: rAF timed out (page hidden?)"))?
-    .context("CDP read canvas pixels")?;
+    let result = tokio::time::timeout(Duration::from_millis(8000), page.evaluate(body.as_str()))
+        .await
+        .map_err(|_| anyhow!("canvas pixels: evaluate timed out"))?
+        .context("CDP read canvas pixels")?;
     let value = result
         .value()
         .ok_or_else(|| anyhow!("canvas pixels: no value returned"))?;
